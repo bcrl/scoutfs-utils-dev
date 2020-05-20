@@ -15,6 +15,10 @@
 #include "ioctl.h"
 #include "cmd.h"
 
+#ifndef MAX_ERRNO
+#define MAX_ERRNO 4095
+#endif
+
 static int stage_cmd(int argc, char **argv)
 {
 	struct scoutfs_ioctl_stage args;
@@ -136,6 +140,101 @@ static void __attribute__((constructor)) stage_ctor(void)
 {
 	cmd_register("stage", "<file> <vers> <offset> <count> <archive file>",
 		     "write archive file contents to offline region", stage_cmd);
+}
+
+static int stage_err_cmd(int argc, char **argv)
+{
+	struct scoutfs_ioctl_stage_err args;
+	u64 start_offset, end_offset;
+	char *endptr = NULL;
+	int fd = -1;
+	s64 stage_err;
+	u64 vers;
+	int ret;
+
+	if (argc != 6) {
+		fprintf(stderr, "must specify moar args\n");
+		return -EINVAL;
+	}
+
+	fd = open(argv[1], O_RDWR);
+	if (fd < 0) {
+		ret = -errno;
+		fprintf(stderr, "failed to open '%s': %s (%d)\n",
+			argv[1], strerror(errno), errno);
+		return ret;
+	}
+
+	vers = strtoull(argv[2], &endptr, 0);
+	if (*endptr != '\0' ||
+	    ((vers == LLONG_MIN || vers == LLONG_MAX) && errno == ERANGE)) {
+		fprintf(stderr, "error parsing data version '%s'\n",
+			argv[2]);
+		ret = -EINVAL;
+		goto out;
+	}
+
+	start_offset = strtoull(argv[3], &endptr, 0);
+	if (*endptr != '\0' ||
+	    ((start_offset == LLONG_MIN || start_offset == LLONG_MAX) &&
+	     (errno == ERANGE))) {
+		fprintf(stderr, "error parsing offset '%s'\n",
+			argv[3]);
+		ret = -EINVAL;
+		goto out;
+	}
+
+	end_offset = strtoull(argv[4], &endptr, 0);
+	if (*endptr != '\0' ||
+	    ((end_offset == LLONG_MIN || end_offset == LLONG_MAX) &&
+	     (errno == ERANGE))) {
+		fprintf(stderr, "error parsing offset '%s'\n",
+			argv[3]);
+		ret = -EINVAL;
+		goto out;
+	}
+
+	stage_err = strtoll(argv[5], &endptr, 0);
+	if (*endptr != '\0' ||
+	    ((stage_err == LLONG_MIN || stage_err == LLONG_MAX) && errno == ERANGE)) {
+		fprintf(stderr, "error parsing stage_err '%s'\n",
+			argv[4]);
+		ret = -EINVAL;
+		goto out;
+	}
+
+	if ((stage_err >= 0) || (stage_err < -MAX_ERRNO)) {
+		fprintf(stderr, "stage_err %lld invalid\n", stage_err);
+		ret = -EINVAL;
+		goto out;
+	}
+
+	memset(&args, 0, sizeof(args));
+	args.data_version = vers;
+	args.start_offset = start_offset;
+	args.end_offset = end_offset;
+	args.err = stage_err;
+
+	ret = ioctl(fd, SCOUTFS_IOC_STAGE_ERR, &args);
+	if (ret < 0) {
+		fprintf(stderr, "stage returned %d: error %s (%d)\n",
+			ret, strerror(errno), errno);
+		ret = -EIO;
+		goto out;
+	}
+	printf("stage_err woke %d waiters.\n", ret);
+
+out:
+	if (fd > -1)
+		close(fd);
+	return ret;
+};
+
+static void __attribute__((constructor)) stage_err_ctor(void)
+{
+	cmd_register("stage_err", "<file> <vers> <start> <end> <err>",
+		     "report staging error for offline region",
+		     stage_err_cmd);
 }
 
 static int release_cmd(int argc, char **argv)
